@@ -355,6 +355,9 @@ def _get_bond_triplets(topology, exclude_water=True, sidechain_only=False,
             return False
         # Filter non-interesting atoms
         if interesting_atoms is not None and atom.index not in interesting_atoms:
+            # If atom is an hydrogen, it does not need to be in interesting_atoms
+            if atom.element.symbol == 'H':
+                return True
             return False
         # Otherwise, accept it
         return True
