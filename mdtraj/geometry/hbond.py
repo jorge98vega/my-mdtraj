@@ -175,8 +175,8 @@ def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_
         Set to True to only consider sidechain-sidechain interactions.
     interesting_atoms : list, default=None
         If not None, inlude only atoms whose indices are in the list.
-    return_distances : bool, default=False
-        Set to True to return the H...Acceptor distances of thr hydrogen bonds.
+    return_geometry : bool, default=False
+        Set to True to return the H...Acceptor distances and angles of the hydrogen bonds.
     distance_cutoff : float, default=0.25
         Distance cutoff of Donor-H...Acceptor contact in nanometers. 
         The criterion employed is any contact that is shorter than the distance cutoff.
@@ -198,10 +198,13 @@ def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_
         of the trajectory.
     distances : np.array, shape=[n_frames, n_hbonds], dtype=float, optional
         An array containing the distances between the hydrogen and the acceptor of
-        each hydrogen bond. Only provided if return_distances is True.
+        each hydrogen bond. Only provided if return_geometry is True.
+    angles : np.array, shape=[n_frames, n_hbonds], dtype=float, optional
+        An array containing the angles formed by the donor, the hydrogen and the
+        acceptor of each hydrogen bond. Only provided if return_geometry is True.
     presence : np.array, shape=[n_frames, n_hbonds], dtype=bool, optional
         An array containing the truth value of the hbonds satisfying the distance
-        and angle conditions. Only provided if return_distances is True.
+        and angle conditions. Only provided if return_geometry is True.
 
     Notes
     -----
@@ -260,8 +263,8 @@ def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_
     # Find triplets that meet the criteria
     presence = np.logical_and(distances < distance_cutoff, angles > angle_cutoff)
 
-    if return_distances: ## ¿Así o devolverlo siempre?
-        return bond_triplets.compress(mask, axis=0), distances, presence
+    if return_geometry: ## ¿Así o devolverlo siempre?
+        return bond_triplets.compress(mask, axis=0), distances, angles, presence
     mask[mask] = np.mean(presence, axis=0) > freq
     return bond_triplets.compress(mask, axis=0)
 
