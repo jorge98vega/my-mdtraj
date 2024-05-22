@@ -148,7 +148,7 @@ def wernet_nilsson(traj, exclude_water=False, periodic=True, sidechain_only=Fals
 
 
 def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_only=False,
-                  interesting_atoms=None, return_distances=False,
+                  interesting_atoms=None, return_geometry=False,
                   distance_cutoff=0.25, angle_cutoff=120):
     """Identify hydrogen bonds based on cutoffs for the Donor-H...Acceptor
     distance and angle.
@@ -166,7 +166,7 @@ def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_
         An mdtraj trajectory. It must contain topology information.
     freq : float, default=0.1
         Return only hydrogen bonds that occur in greater this fraction of the
-        frames in the trajectory. (Only if return_distances is False).
+        frames in the trajectory. (Only if return_geometry is False).
     exclude_water : bool, default=False
         Exclude solvent molecules from consideration
     periodic : bool, default=True
@@ -194,7 +194,7 @@ def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_
         a_i)`, such that `d_i` is the index of the donor atom, `h_i` the index
         of the hydrogen atom, and `a_i` the index of the acceptor atom involved
         in a hydrogen bond which occurs (according to the definition above,
-        and only if return_distances is False) in proportion greater than `freq`
+        and only if return_geometry is False) in proportion greater than `freq`
         of the trajectory.
     distances : np.array, shape=[n_frames, n_hbonds], dtype=float, optional
         An array containing the distances between the hydrogen and the acceptor of
