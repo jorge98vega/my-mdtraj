@@ -148,7 +148,7 @@ def wernet_nilsson(traj, exclude_water=False, periodic=True, sidechain_only=Fals
 
 
 def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_only=False,
-                  interesting_atoms=None, return_geometry=False,
+                  interesting_atoms=None, return_geometry=False, chunk_size=None,
                   distance_cutoff=0.25, angle_cutoff=120):
     """Identify hydrogen bonds based on cutoffs for the Donor-H...Acceptor
     distance and angle.
@@ -252,21 +252,61 @@ def baker_hubbard(traj, freq=0.1, exclude_water=False, periodic=True, sidechain_
         raise ValueError('baker_hubbard requires that traj contain topology '
                          'information')
 
+    # Original method
+    if chunk_size is None:
+        # Get the possible donor-hydrogen...acceptor triplets
+        bond_triplets = _get_bond_triplets(traj.topology,
+            exclude_water=exclude_water, sidechain_only=sidechain_only,
+            interesting_atoms=interesting_atoms)
+
+        mask, distances, angles = _compute_bounded_geometry(traj, bond_triplets,
+            distance_cutoff, [1, 2], [0, 1, 2], freq=freq, periodic=periodic)
+
+        # Find triplets that meet the criteria
+        presence = np.logical_and(distances < distance_cutoff, angles > angle_cutoff)
+
+        if return_geometry: ## ¿Así o devolverlo siempre?
+            return bond_triplets.compress(mask, axis=0), distances, angles, presence
+        mask[mask] = np.mean(presence, axis=0) > freq
+        return bond_triplets.compress(mask, axis=0)
+
+    # Chunk method
+    all_triplets = []
+    all_distances = []
+    all_angles = []
+    all_presence = []
+
     # Get the possible donor-hydrogen...acceptor triplets
-    bond_triplets = _get_bond_triplets(traj.topology,
+    for chunk_triplets in _get_bond_triplets_chunked(traj.topology, chunk_size,
         exclude_water=exclude_water, sidechain_only=sidechain_only,
-        interesting_atoms=interesting_atoms)
+        interesting_atoms=interesting_atoms):
 
-    mask, distances, angles = _compute_bounded_geometry(traj, bond_triplets,
-        distance_cutoff, [1, 2], [0, 1, 2], freq=freq, periodic=periodic)
+        if chunk_triplets.shape[0] == 0:
+            continue
 
-    # Find triplets that meet the criteria
-    presence = np.logical_and(distances < distance_cutoff, angles > angle_cutoff)
+        mask, distances, angles = _compute_bounded_geometry(traj, chunk_triplets,
+            distance_cutoff, [1, 2], [0, 1, 2], freq=freq, periodic=periodic)
 
-    if return_geometry: ## ¿Así o devolverlo siempre?
-        return bond_triplets.compress(mask, axis=0), distances, angles, presence
-    mask[mask] = np.mean(presence, axis=0) > freq
-    return bond_triplets.compress(mask, axis=0)
+        # Find triplets that meet the criteria
+        presence = np.logical_and(distances < distance_cutoff, angles > angle_cutoff)
+
+        if return_geometry:
+            all_triplets.append(chunk_triplets[mask])
+            all_distances.append(distances)
+            all_angles.append(angles)
+            all_presence.append(presence)
+        else:
+            mask[mask] = np.mean(presence, axis=0) > freq
+            all_triplets.append(chunk_triplets[mask])
+
+    if not all_triplets:
+        if return_geometry:
+            return np.zeros((0, 3), dtype=int), np.empty((traj.n_frames, 0)), np.empty((traj.n_frames, 0)), np.empty((traj.n_frames, 0), dtype=bool)
+        return np.zeros((0, 3), dtype=int)
+
+    if return_geometry:
+        return np.vstack(all_triplets), np.hstack(all_distances), np.hstack(all_angles), np.hstack(all_presence)
+    return np.vstack(all_triplets)
 
 
 def kabsch_sander(traj):
@@ -421,6 +461,86 @@ def _get_bond_triplets(topology, exclude_water=True, sidechain_only=False,
     # Filter out self-bonds
     self_bond_mask = (bond_triplets[:, 0] == bond_triplets[:, 2])
     return bond_triplets[np.logical_not(self_bond_mask), :]
+
+
+def _get_bond_triplets_chunked(topology, chunk_size,
+                               exclude_water=True, sidechain_only=False,
+                               interesting_atoms=None):
+    def can_participate(atom):
+        # Filter waters
+        if exclude_water and atom.residue.is_water:
+            return False
+        # Filter non-sidechain atoms
+        if sidechain_only and not atom.is_sidechain:
+            return False
+        # Filter non-interesting atoms
+        if interesting_atoms is not None and atom.index not in interesting_atoms:
+            # If atom is an hydrogen, it does not need to be in interesting_atoms
+            if atom.element.symbol == 'H':
+                return True
+            return False
+        # Otherwise, accept it
+        return True
+
+    def get_donors(e0, e1):
+        # Find all matching bonds
+        elems = set((e0, e1))
+        atoms = [(one, two) for one, two in topology.bonds
+            if set((one.element.symbol, two.element.symbol)) == elems]
+
+        # Filter non-participating atoms
+        atoms = [atom for atom in atoms
+            if can_participate(atom[0]) and can_participate(atom[1])]
+
+        # Get indices for the remaining atoms
+        indices = []
+        for a0, a1 in atoms:
+            pair = (a0.index, a1.index)
+            # make sure to get the pair in the right order, so that the index
+            # for e0 comes before e1
+            if a0.element.symbol == e1:
+                pair = pair[::-1]
+            indices.append(pair)
+
+        return indices
+
+    # Check that there are bonds in topology
+    nbonds = 0
+    for _bond in topology.bonds:
+        nbonds += 1
+        break # Only need to find one hit for this check (not robust)
+    if nbonds == 0:
+        raise ValueError('No bonds found in topology. Try using '
+                         'traj._topology.create_standard_bonds() to create bonds '
+                         'using our PDB standard bond definitions.')
+
+    nh_donors = get_donors('N', 'H')
+    oh_donors = get_donors('O', 'H')
+    xh_donors = np.array(nh_donors + oh_donors)
+
+    if len(xh_donors) == 0:
+        # if there are no hydrogens or protein in the trajectory, we get
+        # no possible pairs and return nothing
+        yield np.zeros((0, 3), dtype=int)
+
+    acceptor_elements = frozenset(('O', 'N', 'Cl', 'F'))
+    acceptors = [a.index for a in topology.atoms
+        if a.element.symbol in acceptor_elements and can_participate(a)]
+
+    # Make acceptors a 2-D numpy array
+    acceptors = np.array(acceptors)[:, np.newaxis]
+
+    for i in range(0, xh_donors.shape[0], chunk_size):
+        donor_chunk = xh_donors[i:i + chunk_size]
+
+        # Generate the cartesian product of the donors and acceptors
+        donor_chunk_repeated = np.repeat(donor_chunk, acceptors.shape[0], axis=0)
+        acceptors_tiled = np.tile(acceptors, (donor_chunk.shape[0], 1))
+        bond_triplets = np.hstack((donor_chunk_repeated, acceptors_tiled))
+
+        # Filter out self-bonds
+        self_bond_mask = (bond_triplets[:, 0] == bond_triplets[:, 2])
+        yield bond_triplets[np.logical_not(self_bond_mask), :]
 
 
 def _compute_bounded_geometry(traj, triplets, distance_cutoff, distance_indices,
